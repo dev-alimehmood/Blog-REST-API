@@ -48,7 +48,10 @@ staticfiles/
 media/
 *.log
 
-# IDE and editors
+# Archives
+*.zip
+*.tar.gz
+*.tgz
 .idea/
 .vscode/
 *.swp

@@ -1,12 +1,12 @@
 """
 API Views for Mini Blog Platform.
 
-Includes post management, nested comments, and optimized analytics endpoints.
-Fully documented with drf-spectacular OpenAPI schemas and examples.
+Provides endpoints for User registration, Post CRUD, Comment management,
+and optimized ORM analytics.
 """
 
 from django.db.models import Count
-from django.shortcuts import get_object_or_404
+from django.http import Http404
 from rest_framework import status
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -17,18 +17,18 @@ from drf_spectacular.utils import (
     OpenApiParameter,
     OpenApiExample,
     OpenApiResponse,
-    inline_serializer,
 )
-from rest_framework import serializers
 
 from .models import User, Post, Comment
 from .serializers import (
     UserSerializer,
-    UserSummarySerializer,
     PostSerializer,
     CommentSerializer,
     TopPostSerializer,
     ActiveUserSerializer,
+    MostActiveUserResponseSerializer,
+    PaginatedPostListSerializer,
+    PaginatedCommentListSerializer,
 )
 from .queries import (
     get_top_three_posts,
@@ -40,7 +40,7 @@ from .pagination import StandardResultsSetPagination
 
 
 # ==============================================================================
-# USER MANAGEMENT VIEWS (Helper for evaluation & testing)
+# User Management Views
 # ==============================================================================
 
 @extend_schema_view(
@@ -57,7 +57,7 @@ from .pagination import StandardResultsSetPagination
         request=UserSerializer,
         responses={
             201: UserSerializer,
-            400: OpenApiResponse(description="Validation error (e.g., duplicate email or missing fields).")
+            400: OpenApiResponse(description="Validation error (e.g. duplicate email, weak password, or blank name).")
         },
         examples=[
             OpenApiExample(
@@ -84,7 +84,7 @@ from .pagination import StandardResultsSetPagination
 )
 class UserListCreateView(ListCreateAPIView):
     """
-    Endpoint for listing users and registering new accounts.
+    List registered users or register a new user account.
     """
     queryset = User.objects.all().order_by('id')
     serializer_class = UserSerializer
@@ -102,14 +102,14 @@ class UserListCreateView(ListCreateAPIView):
 )
 class UserDetailView(RetrieveAPIView):
     """
-    Endpoint for retrieving a specific user by ID.
+    Retrieve single user details by ID.
     """
     queryset = User.objects.all()
     serializer_class = UserSerializer
 
 
 # ==============================================================================
-# POSTS MANAGEMENT VIEWS
+# Post Management Views
 # ==============================================================================
 
 class PostListCreateView(APIView):
@@ -121,21 +121,22 @@ class PostListCreateView(APIView):
 
     @extend_schema(
         tags=['Posts'],
+        operation_id="posts_list",
         summary="List all blog posts",
         description=(
-            "Retrieves a paginated list of all blog posts.\n\n"
+            "Retrieves a paginated list of blog posts.\n\n"
             "Query Optimization:\n"
-            "- Uses `select_related('user')` to fetch author details in a single SQL JOIN.\n"
+            "- Uses `select_related('user')` to fetch author details in a single query.\n"
             "- Uses `annotate(comment_count=Count('comments'))` to calculate total comments per post without N+1 queries."
         ),
         parameters=[
             OpenApiParameter(name='page', type=int, location=OpenApiParameter.QUERY, description='Page number'),
             OpenApiParameter(name='page_size', type=int, location=OpenApiParameter.QUERY, description='Items per page (max 100)'),
         ],
-        responses={200: PostSerializer(many=True)},
+        responses={200: PaginatedPostListSerializer},
         examples=[
             OpenApiExample(
-                "List Posts Response",
+                "Paginated Posts Response",
                 value={
                     "count": 1,
                     "next": None,
@@ -173,12 +174,13 @@ class PostListCreateView(APIView):
 
     @extend_schema(
         tags=['Posts'],
+        operation_id="posts_create",
         summary="Create a new blog post",
-        description="Creates a new blog post. Requires title, content, and valid user ID.",
+        description="Creates a new blog post. Requires title, content, and valid user_id.",
         request=PostSerializer,
         responses={
             201: PostSerializer,
-            400: OpenApiResponse(description="Validation error (e.g., missing fields, nonexistent user).")
+            400: OpenApiResponse(description="Validation error (e.g. missing fields, nonexistent user).")
         },
         examples=[
             OpenApiExample(
@@ -212,7 +214,6 @@ class PostListCreateView(APIView):
         serializer = PostSerializer(data=request.data)
         if serializer.is_valid():
             post = serializer.save()
-            # Re-read post with author select_related and comment count for consistent output
             response_post = (
                 Post.objects
                 .select_related('user')
@@ -231,6 +232,7 @@ class PostDetailView(APIView):
 
     @extend_schema(
         tags=['Posts'],
+        operation_id="posts_retrieve",
         summary="Retrieve a single blog post",
         description="Fetches full details of a specific blog post including author information and total comment count.",
         responses={
@@ -275,7 +277,7 @@ class PostDetailView(APIView):
 
 
 # ==============================================================================
-# COMMENTS MANAGEMENT VIEWS
+# Comments Management Views
 # ==============================================================================
 
 class PostCommentListCreateView(APIView):
@@ -287,6 +289,7 @@ class PostCommentListCreateView(APIView):
 
     @extend_schema(
         tags=['Comments'],
+        operation_id="post_comments_list",
         summary="List all comments for a post",
         description=(
             "Retrieves all comments written on a specific post sorted newest first.\n\n"
@@ -299,12 +302,12 @@ class PostCommentListCreateView(APIView):
             OpenApiParameter(name='page_size', type=int, location=OpenApiParameter.QUERY, description='Items per page'),
         ],
         responses={
-            200: CommentSerializer(many=True),
+            200: PaginatedCommentListSerializer,
             404: OpenApiResponse(description="Post not found.")
         },
         examples=[
             OpenApiExample(
-                "List Comments Response",
+                "Paginated Comments Response",
                 value={
                     "count": 1,
                     "next": None,
@@ -329,10 +332,9 @@ class PostCommentListCreateView(APIView):
         ]
     )
     def get(self, request, pk):
-        # Query 4: Fetch all comments for a given post using select_related('user')
         try:
             comments_queryset = get_comments_for_post(post_id=pk)
-        except Exception:
+        except Http404:
             return Response(
                 {"detail": f"Post with ID {pk} does not exist."},
                 status=status.HTTP_404_NOT_FOUND
@@ -345,12 +347,13 @@ class PostCommentListCreateView(APIView):
 
     @extend_schema(
         tags=['Comments'],
+        operation_id="post_comments_create",
         summary="Add a comment to a blog post",
         description="Posts a new comment on a specific post. Validates that both the post and user exist.",
         request=CommentSerializer,
         responses={
             201: CommentSerializer,
-            400: OpenApiResponse(description="Validation error (e.g., missing comment text or invalid user)."),
+            400: OpenApiResponse(description="Validation error (e.g. missing comment text or invalid user_id)."),
             404: OpenApiResponse(description="Post not found.")
         },
         examples=[
@@ -392,7 +395,6 @@ class PostCommentListCreateView(APIView):
         serializer = CommentSerializer(data=request.data)
         if serializer.is_valid():
             comment = serializer.save(post=post)
-            # Re-read with select_related for clean output
             refetched = Comment.objects.select_related('user').get(id=comment.id)
             response_serializer = CommentSerializer(refetched)
             return Response(response_serializer.data, status=status.HTTP_201_CREATED)
@@ -400,7 +402,7 @@ class PostCommentListCreateView(APIView):
 
 
 # ==============================================================================
-# ANALYTICS VIEWS (CRITICAL ORM QUERIES)
+# Analytics Views (Critical ORM Queries)
 # ==============================================================================
 
 class TopPostsAnalyticsView(APIView):
@@ -424,11 +426,7 @@ class TopPostsAnalyticsView(APIView):
         examples=[
             OpenApiExample(
                 "Top Posts Response",
-                value=[
-                    {"id": 1, "title": "Advanced Django ORM", "total_comments": 15},
-                    {"id": 2, "title": "Building Scalable APIs", "total_comments": 8},
-                    {"id": 3, "title": "Python Performance Tuning", "total_comments": 4}
-                ],
+                value={"id": 1, "title": "Advanced Django ORM", "total_comments": 15},
                 response_only=True
             )
         ]
@@ -454,20 +452,9 @@ class MostActiveUserAnalyticsView(APIView):
             "`User.objects.annotate(total_comments=Count('comments')).order_by('-total_comments', 'id').first()`\n\n"
             "- Uses aggregation via `annotate()` and `Count()`.\n"
             "- Deterministic tie-breaking using user ID.\n"
-            "- Gracefully handles empty database state when no comments exist."
+            "- Handles empty database state when no comments exist."
         ),
-        responses={
-            200: inline_serializer(
-                name="MostActiveUserResponse",
-                fields={
-                    "id": serializers.IntegerField(allow_null=True),
-                    "name": serializers.CharField(allow_null=True),
-                    "email": serializers.EmailField(allow_null=True),
-                    "total_comments": serializers.IntegerField(allow_null=True),
-                    "detail": serializers.CharField(required=False),
-                }
-            )
-        },
+        responses={200: MostActiveUserResponseSerializer},
         examples=[
             OpenApiExample(
                 "Active User Found",
@@ -525,10 +512,7 @@ class ActiveUsersAnalyticsView(APIView):
         examples=[
             OpenApiExample(
                 "Active Users Response",
-                value=[
-                    {"id": 2, "name": "Jane Commenter", "email": "jane@example.com", "total_comments": 12},
-                    {"id": 5, "name": "Alex Tech", "email": "alex@example.com", "total_comments": 4}
-                ],
+                value={"id": 2, "name": "Jane Commenter", "email": "jane@example.com", "total_comments": 12},
                 response_only=True
             )
         ]
@@ -537,4 +521,3 @@ class ActiveUsersAnalyticsView(APIView):
         users = get_users_with_more_than_three_comments()
         serializer = ActiveUserSerializer(users, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
-

@@ -53,7 +53,6 @@ class Post(models.Model):
     )
     created_at = models.DateTimeField(
         auto_now_add=True,
-        db_index=True,
         help_text="Timestamp when the post was created."
     )
 
@@ -91,7 +90,6 @@ class Comment(models.Model):
     )
     created_at = models.DateTimeField(
         auto_now_add=True,
-        db_index=True,
         help_text="Timestamp when the comment was created."
     )
 

@@ -1,10 +1,11 @@
 """
 Serializers for Mini Blog REST API.
 
-Provides serialization, deserialization, and field-level validation
-for Users, Posts, Comments, and Analytics queries.
+Provides serialization, deserialization, and validation
+for Users, Posts, Comments, and Analytics responses.
 """
 
+from django.contrib.auth.password_validation import validate_password
 from rest_framework import serializers
 from .models import User, Post, Comment
 
@@ -21,15 +22,14 @@ class UserSummarySerializer(serializers.ModelSerializer):
 
 class UserSerializer(serializers.ModelSerializer):
     """
-    Serializer for full User creation and listing.
-    Ensures password is write-only and safely hashed.
+    Serializer for User creation and retrieval.
+    Applies Django's configured password validators and ensures passwords are write-only.
     """
     password = serializers.CharField(
         write_only=True,
         required=True,
-        min_length=8,
         style={'input_type': 'password'},
-        help_text="Password must be at least 8 characters long."
+        help_text="Password must satisfy Django password validation rules."
     )
 
     class Meta:
@@ -48,40 +48,35 @@ class UserSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("A user with this email already exists.")
         return normalized_email
 
+    def validate_password(self, value):
+        validate_password(value)
+        return value
+
     def create(self, validated_data):
         password = validated_data.pop('password')
         name = validated_data.get('name', '').strip()
         email = validated_data['email']
-        username = email  # Use email as default username
 
-        user = User(
-            username=username,
+        return User.objects.create_user(
+            username=email,
             email=email,
-            name=name
+            name=name,
+            password=password,
         )
-        user.set_password(password)
-        user.save()
-        return user
 
 
 class PostSerializer(serializers.ModelSerializer):
     """
-    Serializer for retrieving and listing Posts.
-    Includes nested author details and aggregated comment_count.
+    Serializer for creating, retrieving, and listing Posts.
+    Accepts user_id on write, outputs nested author details and comment count on read.
     """
     author = UserSummarySerializer(source='user', read_only=True)
     user_id = serializers.PrimaryKeyRelatedField(
         queryset=User.objects.all(),
         source='user',
         write_only=True,
-        required=False,
+        required=True,
         help_text="ID of the user creating the post."
-    )
-    user = serializers.PrimaryKeyRelatedField(
-        queryset=User.objects.all(),
-        write_only=True,
-        required=False,
-        help_text="Alternative parameter for author user ID."
     )
     comment_count = serializers.IntegerField(read_only=True, default=0)
 
@@ -93,9 +88,8 @@ class PostSerializer(serializers.ModelSerializer):
             'content',
             'author',
             'user_id',
-            'user',
             'comment_count',
-            'created_at'
+            'created_at',
         ]
         read_only_fields = ['id', 'author', 'comment_count', 'created_at']
 
@@ -113,37 +107,21 @@ class PostSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Content cannot be blank or contain only whitespace.")
         return cleaned
 
-    def validate(self, attrs):
-        # Resolve either user_id or user
-        user = attrs.get('user')
-        if not user:
-            raise serializers.ValidationError({
-                "user_id": "User ID is required to create a post."
-            })
-        attrs['user'] = user
-        return attrs
-
 
 class CommentSerializer(serializers.ModelSerializer):
     """
     Serializer for creating and displaying comments.
-    Includes commenter details and timestamp.
+    Accepts user_id on write, outputs commenter details on read.
     """
     commenter_name = serializers.CharField(source='user.name', read_only=True)
+    author = UserSummarySerializer(source='user', read_only=True)
     user_id = serializers.PrimaryKeyRelatedField(
         queryset=User.objects.all(),
         source='user',
         write_only=True,
-        required=False,
+        required=True,
         help_text="ID of the user authoring the comment."
     )
-    user = serializers.PrimaryKeyRelatedField(
-        queryset=User.objects.all(),
-        write_only=True,
-        required=False,
-        help_text="Alternative parameter for user ID."
-    )
-    author = UserSummarySerializer(source='user', read_only=True)
 
     class Meta:
         model = Comment
@@ -153,9 +131,8 @@ class CommentSerializer(serializers.ModelSerializer):
             'commenter_name',
             'author',
             'user_id',
-            'user',
             'comment_text',
-            'created_at'
+            'created_at',
         ]
         read_only_fields = ['id', 'post_id', 'commenter_name', 'author', 'created_at']
 
@@ -164,15 +141,6 @@ class CommentSerializer(serializers.ModelSerializer):
         if not cleaned:
             raise serializers.ValidationError("Comment text cannot be blank.")
         return cleaned
-
-    def validate(self, attrs):
-        user = attrs.get('user')
-        if not user:
-            raise serializers.ValidationError({
-                "user_id": "User ID is required to post a comment."
-            })
-        attrs['user'] = user
-        return attrs
 
 
 class TopPostSerializer(serializers.Serializer):
@@ -193,3 +161,34 @@ class ActiveUserSerializer(serializers.Serializer):
     email = serializers.EmailField(read_only=True)
     total_comments = serializers.IntegerField(read_only=True)
 
+
+class MostActiveUserResponseSerializer(serializers.Serializer):
+    """
+    Documentation schema covering both active user data and the empty database state.
+    """
+    id = serializers.IntegerField(required=False, allow_null=True)
+    name = serializers.CharField(required=False, allow_null=True)
+    email = serializers.EmailField(required=False, allow_null=True)
+    total_comments = serializers.IntegerField(required=False, allow_null=True)
+    detail = serializers.CharField(required=False)
+    user = serializers.CharField(required=False, allow_null=True)
+
+
+class PaginatedPostListSerializer(serializers.Serializer):
+    """
+    OpenAPI schema for paginated post listings.
+    """
+    count = serializers.IntegerField()
+    next = serializers.CharField(allow_null=True)
+    previous = serializers.CharField(allow_null=True)
+    results = PostSerializer(many=True)
+
+
+class PaginatedCommentListSerializer(serializers.Serializer):
+    """
+    OpenAPI schema for paginated comment listings.
+    """
+    count = serializers.IntegerField()
+    next = serializers.CharField(allow_null=True)
+    previous = serializers.CharField(allow_null=True)
+    results = CommentSerializer(many=True)

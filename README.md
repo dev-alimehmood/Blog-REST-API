@@ -169,7 +169,7 @@ python manage.py seed_data
 python manage.py runserver
 ```
 
-The server will start at `http://127.0.0.1:8000/`.
+The server will start at `http://127.0.0.1:8000/`.  and live url is `http://34.239.247.1/`
 
 ---
 
@@ -177,9 +177,9 @@ The server will start at `http://127.0.0.1:8000/`.
 
 Once the server is running, interactive API documentation is available at:
 
-- **Swagger UI:** `http://127.0.0.1:8000/api/docs/`
-- **ReDoc:** `http://127.0.0.1:8000/api/redoc/`
-- **Raw OpenAPI Schema:** `http://127.0.0.1:8000/api/schema/`
+- **Swagger UI:** `http://34.239.247.1/api/docs/`
+
+- **Raw OpenAPI Schema:** `http://34.239.247.1/api/schema/`
 - The root URL (`/`) automatically redirects to Swagger UI (`/api/docs/`).
 
 ---
@@ -459,7 +459,7 @@ List endpoints (`/api/posts/`, `/api/posts/{id}/comments/`, `/api/users/`) use s
   ```json
   {
     "count": 25,
-    "next": "http://127.0.0.1:8000/api/posts/?page=2",
+    "next": "http://34.239.247.1/api/posts/?page=2",
     "previous": null,
     "results": [ ... ]
   }
@@ -490,87 +490,3 @@ python manage.py test blog -v 2
 
 ---
 
-## Deployment Guide
-
-The application is configured for deployment using Gunicorn and WhiteNoise.
-
-### Production Environment Variables
-
-Before deploying, ensure these environment variables are set on your hosting platform:
-
-```env
-SECRET_KEY=<a-secure-random-secret-key>
-DEBUG=False
-ALLOWED_HOSTS=<your-app-domain>
-```
-
-### Option A: PythonAnywhere (Recommended for Persistent SQLite)
-
-PythonAnywhere provides persistent disk storage on its free tier, making it ideal for maintaining the SQLite database without data resets:
-
-1. Create a free account at [PythonAnywhere](https://www.pythonanywhere.com/).
-2. In a Bash console, clone your repository and create a virtual environment:
-   ```bash
-   git clone <your-repo-url> mini_blog
-   cd mini_blog
-   mkvirtualenv --python=/usr/bin/python3.10 mini-blog-env
-   pip install -r requirements.txt
-   ```
-3. Create `.env` with production values:
-   ```bash
-   nano .env
-   # Set SECRET_KEY, DEBUG=False, ALLOWED_HOSTS=<username>.pythonanywhere.com
-   ```
-4. Run migrations and collect static assets:
-   ```bash
-   python manage.py migrate
-   python manage.py collectstatic --noinput
-   python manage.py seed_data
-   ```
-5. In the **Web** tab:
-   - Set source directory: `/home/<username>/mini_blog`
-   - Set virtualenv: `/home/<username>/.virtualenvs/mini-blog-env`
-   - Update the WSGI configuration file:
-     ```python
-     import os
-     import sys
-     from dotenv import load_dotenv
-
-     path = '/home/<username>/mini_blog'
-     if path not in sys.path:
-         sys.path.append(path)
-
-     load_dotenv(os.path.join(path, '.env'))
-     os.environ['DJANGO_SETTINGS_MODULE'] = 'config.settings'
-
-     from django.core.wsgi import get_wsgi_application
-     application = get_wsgi_application()
-     ```
-6. Click **Reload**.
-
----
-
-### Option B: Render Deployment
-
-A `render.yaml` blueprint and `Procfile` are included in the repository:
-
-- `Procfile`:
-  ```
-  web: gunicorn config.wsgi:application --bind 0.0.0.0:$PORT
-  ```
-- `render.yaml`:
-  Configures build command (`pip install -r requirements.txt && python manage.py collectstatic --noinput && python manage.py migrate`), start command (`gunicorn config.wsgi:application --bind 0.0.0.0:$PORT`), and environment variables.
-
-> **Note on Render Free Tier & SQLite:** Render's free tier uses ephemeral containers. Files written to disk (including `db.sqlite3`) are reset when the container spins down or redeploys. For persistent data on Render, either attach a Render Persistent Disk or configure a PostgreSQL database. For a completely free deployment retaining SQLite data, PythonAnywhere is recommended.
-
----
-
-## Final Verification Checklist
-
-The following checks have been executed and verified in the environment:
-
-- `python manage.py check` — 0 issues identified.
-- `python manage.py makemigrations --check --dry-run` — No unapplied changes.
-- `python manage.py migrate --plan` — All migrations applied.
-- `python manage.py test blog -v 2` — 31/31 tests passing (100%).
-- `python manage.py spectacular --validate` — Valid OpenAPI 3.0 schema with 0 errors and 0 warnings.
